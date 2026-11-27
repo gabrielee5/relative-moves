@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15_000;          // local API, cheap
 const OHLC_RELOAD_MS = 60_000;   // matches the server-side OHLC cache TTL
+const RIGHT_GAP_BARS = 15;       // empty space after the last candle
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60; // show chart times in local time
 
 const state = {
@@ -126,7 +127,7 @@ function initChart() {
     layout: { background: { color: v("--bg") }, textColor: v("--muted"), fontSize: 11, attributionLogo: false },
     grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
     rightPriceScale: { borderColor: v("--border") },
-    timeScale: { borderColor: v("--border"), timeVisible: true, secondsVisible: false },
+    timeScale: { borderColor: v("--border"), timeVisible: true, secondsVisible: false, rightOffset: RIGHT_GAP_BARS },
   });
   candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
     upColor: v("--up"), downColor: v("--down"),
@@ -163,7 +164,8 @@ async function loadOhlc(fit) {
   if (!chart) initChart();
   candleSeries.applyOptions({ priceFormat: priceFormat(data[data.length - 1].c) });
   candleSeries.setData(data.map((c) => ({ time: c.t / 1000 + TZ_SHIFT, open: c.o, high: c.h, low: c.l, close: c.c })));
-  if (fit) chart.timeScale().fitContent();
+  // fitContent() would put the last candle against the price scale; leave a gap instead
+  if (fit) chart.timeScale().setVisibleLogicalRange({ from: 0, to: data.length - 1 + RIGHT_GAP_BARS });
   ohlcLoadedAt = Date.now();
 }
 
