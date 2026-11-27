@@ -15,7 +15,11 @@ const state = {
   minVol: 0,
   selected: null,
   tf: null,
+  heatScale: {},        // window -> |chg| that maps to full tint (95th percentile of visible rows)
+  lastSnap: null,       // snapshot_at of the last rendered status, for the live-dot pulse
 };
+
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 // ---------- formatting ----------
 
@@ -29,6 +33,13 @@ function fmtPct(x) {
   if (x == null) return '<span class="muted">—</span>';
   const cls = x > 0 ? "up" : x < 0 ? "down" : "";
   return `<span class="${cls}">${x > 0 ? "+" : ""}${x.toFixed(2)}%</span>`;
+}
+
+// Heat tint for a % change: class + strength in [0, 1], relative to the window's scale.
+function heat(x, w) {
+  if (x == null || x === 0) return { cls: "", h: 0 };
+  const scale = state.heatScale[w] || 1;
+  return { cls: x > 0 ? "hu" : "hd", h: Math.min(1, Math.abs(x) / scale) ** 1.4 };
 }
 
 function fmtVol(v) {
@@ -84,15 +95,28 @@ function visibleRows() {
   return present.concat(missing);
 }
 
+function updateHeatScale(rows) {
+  for (const w of state.cfg.windows) {
+    const abs = rows.map((r) => Math.abs(r["chg_" + w])).filter((x) => x > 0).sort((a, b) => a - b);
+    state.heatScale[w] = abs.length ? abs[Math.floor((abs.length - 1) * 0.95)] : 1;
+  }
+}
+
+function heatCell(x, w) {
+  const { cls, h } = heat(x, w);
+  return `<td class="heat ${cls}" style="--h:${h.toFixed(2)}">${fmtPct(x)}</td>`;
+}
+
 function renderBody() {
   const rows = visibleRows();
   const windows = state.cfg.windows;
+  updateHeatScale(rows);
   $("tbody").innerHTML = rows
     .map(
       (r, i) => `<tr data-sym="${r.symbol}" class="${r.symbol === state.selected ? "selected" : ""}">
-        <td>${i + 1}</td><td class="sym">${r.symbol}</td><td>${fmtPrice(r.last)}</td>
-        ${windows.map((w) => `<td>${fmtPct(r["chg_" + w])}</td>`).join("")}
-        <td>${fmtVol(r.volume_24h)}</td></tr>`
+        <td>${i + 1}</td><td class="sym">${r.symbol}</td><td class="last">${fmtPrice(r.last)}</td>
+        ${windows.map((w) => heatCell(r["chg_" + w], w)).join("")}
+        <td class="vol">${fmtVol(r.volume_24h)}</td></tr>`
     )
     .join("");
   $("count").textContent = `${rows.length} / ${state.rows.length}`;
@@ -102,14 +126,29 @@ function renderStatus() {
   const s = state.status;
   if (!s) return;
   const parts = [`Prices ${fmtTime(s.snapshot_at)}`, `candles ${fmtTime(s.synced_at?.[state.cfg.ranking_interval])}`];
-  for (const [iv, p] of Object.entries(s.progress || {})) parts.push(`syncing ${iv} ${p}`);
+  const syncing = Object.entries(s.progress || {});
+  for (const [iv, p] of syncing) parts.push(`syncing ${iv} ${p}`);
   let html = parts.join(" · ");
   const err = s.last_error;
-  if (err && Date.now() - err.at < 15 * 60_000) {
+  const hasErr = err && Date.now() - err.at < 15 * 60_000;
+  if (hasErr) {
     const msg = err.message.replace(/"/g, "&quot;");
     html += ` · <span class="warn" title="${fmtTime(err.at)}: ${msg}">⚠ error</span>`;
   }
   $("status").innerHTML = html;
+  setDot(hasErr ? "error" : syncing.length ? "syncing" : "fresh");
+  if (state.lastSnap != null && s.snapshot_at !== state.lastSnap) {
+    const dot = $("live-dot");
+    dot.classList.remove("pulse");
+    void dot.offsetWidth; // restart the animation
+    dot.classList.add("pulse");
+  }
+  state.lastSnap = s.snapshot_at;
+}
+
+function setDot(kind) {
+  const dot = $("live-dot");
+  for (const k of ["fresh", "syncing", "error"]) dot.classList.toggle(k, k === kind);
 }
 
 // ---------- chart ----------
@@ -125,14 +164,14 @@ function makeOhlcChart(el) {
   const c = { loadedAt: 0, bars: [] };
 
   function init() {
-    const css = getComputedStyle(document.documentElement);
-    const v = (name) => css.getPropertyValue(name).trim();
+    const v = cssVar;
     chart = LightweightCharts.createChart(el, {
       autoSize: true,
-      layout: { background: { color: v("--bg") }, textColor: v("--muted"), fontSize: 11, attributionLogo: false },
-      grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
-      rightPriceScale: { borderColor: v("--border") },
-      timeScale: { borderColor: v("--border"), timeVisible: true, secondsVisible: false, rightOffset: RIGHT_GAP_BARS },
+      layout: { background: { color: v("--bg") }, textColor: v("--muted"), fontSize: 11, fontFamily: v("--font"), attributionLogo: false },
+      grid: { vertLines: { color: v("--grid") }, horzLines: { color: v("--grid") } },
+      crosshair: { vertLine: { color: v("--line-strong"), labelBackgroundColor: v("--raised") }, horzLine: { color: v("--line-strong"), labelBackgroundColor: v("--raised") } },
+      rightPriceScale: { borderColor: v("--line") },
+      timeScale: { borderColor: v("--line"), timeVisible: true, secondsVisible: false, rightOffset: RIGHT_GAP_BARS },
     });
     series = chart.addSeries(LightweightCharts.CandlestickSeries, {
       upColor: v("--up"), downColor: v("--down"),
@@ -205,12 +244,19 @@ function renderTfButtons() {
     .join("");
 }
 
+function pills(r) {
+  return `<span class="pills">${state.cfg.windows.map((w) => {
+    const x = r["chg_" + w];
+    const { cls, h } = heat(x, w);
+    return `<span class="pill ${cls}" style="--h:${h.toFixed(2)}"><span class="k">${w}</span>${fmtPct(x)}</span>`;
+  }).join("")}</span>`;
+}
+
 function renderChartTitle() {
   const r = state.rows.find((x) => x.symbol === state.selected);
+  $("chart-empty").hidden = !!state.selected;
   if (!r) return;
-  const pcts = state.cfg.windows.map((w) => `<span class="muted">${w}</span> ${fmtPct(r["chg_" + w])}`).join(" ");
-  $("chart-title").className = "";
-  $("chart-title").innerHTML = `<b>${r.symbol}</b><span>${fmtPrice(r.last)}</span><span>${pcts}</span>`;
+  $("chart-title").innerHTML = `<span class="sym">${r.symbol}</span><span class="px">${fmtPrice(r.last)}</span>${pills(r)}`;
 }
 
 async function loadOhlc(fit) {
@@ -236,6 +282,7 @@ async function loadRanking() {
     state.status = data.status;
   } catch (e) {
     $("status").innerHTML = `<span class="warn">server unreachable</span>`;
+    setDot("error");
     return;
   }
   renderBody();
@@ -252,7 +299,8 @@ async function refreshNow() {
   const btn = $("refresh");
   const before = state.status?.snapshot_at;
   btn.disabled = true;
-  btn.textContent = "Refreshing…";
+  btn.classList.add("spinning");
+  $("refresh-label").textContent = "Refreshing…";
   await fetch("/api/refresh", { method: "POST" });
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 1000));
@@ -264,13 +312,14 @@ async function refreshNow() {
   loadSignals();
   if (strat.selected) loadStratChart(false);
   btn.disabled = false;
-  btn.textContent = "Refresh";
+  btn.classList.remove("spinning");
+  $("refresh-label").textContent = "Refresh";
 }
 
 // ---------- compare view ----------
 
-const PALETTE = ["#58a6ff", "#f0883e", "#d2a8ff", "#3fb950", "#ffd33d", "#ff7b72", "#39c5cf", "#f778ba"];
-const GREY = "rgba(125, 133, 144, 0.28)";
+const PALETTE = ["#f2b33d", "#5aa9ff", "#c792ea", "#46c28e", "#ff8a65", "#4dd0e1", "#f48fb1", "#d4e157"];
+const GREY_ALPHA = "48"; // hex alpha appended to --muted for background lines
 
 const cmp = {
   lookback: null,
@@ -343,7 +392,8 @@ function updateTip(u) {
   const sym = u.series[s].label;
   const color = cmp.highlights.includes(sym) ? hlColor(sym) : "var(--text)";
   const when = new Date(u.data[0][i] * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  tip.innerHTML = `<b style="color:${color}">${sym}</b>${fmtPct(v)} <span class="muted">${when}</span>`;
+  tip.style.setProperty("--c", color);
+  tip.innerHTML = `<b style="color:${color}">${sym}</b>${fmtPct(v)}<span class="muted">${when}</span>`;
   tip.hidden = false;
   const x = u.cursor.left;
   const flip = x > u.over.clientWidth - 200; // keep the tooltip inside the plot
@@ -374,15 +424,18 @@ function drawCompare() {
   showEmpty("");
   // Grey background lines first, highlighted lines last so they draw on top.
   const order = syms.filter((s) => !hl.includes(s)).sort().concat(hl.filter((s) => syms.includes(s)));
+  const grey = cssVar("--muted") + GREY_ALPHA;
   const line = (s) => hl.includes(s)
     ? { label: s, stroke: hlColor(s), width: 2, spanGaps: true }
-    : { label: s, stroke: GREY, width: 1, spanGaps: true };
+    : { label: s, stroke: grey, width: 1, spanGaps: true };
 
   const el = $("cmp-chart");
   cmp.tip = document.createElement("div"); // created before uPlot: its hooks can fire during setup
   cmp.tip.className = "cmp-tip";
   cmp.tip.hidden = true;
-  const axis = { stroke: "#7d8590", grid: { stroke: "#161b22" }, ticks: { stroke: "#222a35" }, font: "11px -apple-system, sans-serif" };
+  const axis = { stroke: cssVar("--muted"), grid: { stroke: cssVar("--grid") }, ticks: { stroke: cssVar("--line") }, font: `11px ${cssVar("--font")}` };
+  const zeroLine = cssVar("--line-strong");
+  const hoverColor = cssVar("--text");
   const opts = {
     width: el.clientWidth,
     height: el.clientHeight,
@@ -398,7 +451,7 @@ function drawCompare() {
         const y = Math.round(u.valToPos(0, "y", true));
         const c = u.ctx;
         c.save();
-        c.strokeStyle = "#3a4350";
+        c.strokeStyle = zeroLine;
         c.lineWidth = devicePixelRatio;
         c.beginPath();
         c.moveTo(u.bbox.left, y);
@@ -412,7 +465,7 @@ function drawCompare() {
         const c = u.ctx;
         const xs = u.data[0];
         const ys = u.data[s];
-        const color = cmp.highlights.includes(u.series[s].label) ? hlColor(u.series[s].label) : "#e6edf3";
+        const color = cmp.highlights.includes(u.series[s].label) ? hlColor(u.series[s].label) : hoverColor;
         c.save();
         c.beginPath();
         c.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
@@ -547,7 +600,7 @@ function renderSignals() {
       const side = r.side === "long" ? "up" : "down";
       return `<tr data-id="${r.id}" class="${cls}">
         <td>${fmtDateTime(signalTime(r))}</td><td class="sym">${r.symbol}</td>
-        <td class="${side}">${r.side.toUpperCase()}</td><td>${fmtPrice(r.price)}</td>
+        <td><span class="side ${side}">${r.side.toUpperCase()}</span></td><td>${fmtPrice(r.price)}</td>
         <td>${r.stop == null ? "—" : fmtPrice(r.stop)}</td><td>${r.target == null ? "—" : fmtPrice(r.target)}</td>
         <td class="strat-name">${stratInfo(r.strategy).name}</td><td class="note" title="${(r.note || "").replace(/"/g, "&quot;")}">${r.note || ""}</td></tr>`;
     })
@@ -597,8 +650,7 @@ function setStratOverlays() {
   const sel = strat.selected;
   if (!sel) return;
   const step = durMs(strat.tf);
-  const css = getComputedStyle(document.documentElement);
-  const v = (name) => css.getPropertyValue(name).trim();
+  const v = cssVar;
   const marks = strat.signals
     .filter((r) => r.strategy === sel.strategy && r.symbol === sel.symbol)
     .map((r) => ({
@@ -618,9 +670,10 @@ function renderStratTitle() {
   const r = strat.selected;
   if (!r) return;
   const side = r.side === "long" ? "up" : "down";
-  $("strat-title").className = "";
-  $("strat-title").innerHTML = `<b>${r.symbol}</b><span class="${side}">${r.side.toUpperCase()} ${fmtPrice(r.price)}</span>` +
-    `<span class="muted">${stratInfo(r.strategy).name} · ${fmtDateTime(signalTime(r))}</span>`;
+  $("strat-empty").hidden = true;
+  $("strat-title").innerHTML = `<span class="sym">${r.symbol}</span><span class="side ${side}">${r.side.toUpperCase()}</span>` +
+    `<span class="px">${fmtPrice(r.price)}</span>` +
+    `<span class="meta">${stratInfo(r.strategy).name} · ${fmtDateTime(signalTime(r))}</span>`;
 }
 
 async function loadStratChart(fit) {
@@ -731,7 +784,7 @@ async function main() {
   });
 
   $("tabs").addEventListener("click", (e) => {
-    const view = e.target.dataset?.view;
+    const view = e.target.closest("[data-view]")?.dataset.view;
     if (view) location.hash = view === "ranking" ? "" : view;
   });
   window.addEventListener("hashchange", showView);
