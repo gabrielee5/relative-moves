@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relative Moves</title>
+  <link rel="stylesheet" href="/static/vendor/uPlot-1.6.32.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <strong>Relative Moves</strong>
+    <span id="exchange" class="muted"></span>
+    <nav id="tabs">
+      <button type="button" data-view="ranking">Ranking</button>
+      <button type="button" data-view="compare">Compare</button>
+    </nav>
+    <span class="spacer"></span>
+    <span id="status" class="muted"></span>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+
+  <!-- Feature 1: ranked table + OHLC snapshot -->
+  <main id="view-ranking" class="view">
+    <section id="table-panel">
+      <div class="toolbar">
+        <input id="filter" type="search" placeholder="Filter symbol" autocomplete="off" spellcheck="false">
+        <label class="muted">Min vol
+          <select id="minvol">
+            <option value="0">any</option>
+            <option value="1e5">$100K</option>
+            <option value="1e6">$1M</option>
+            <option value="1e7">$10M</option>
+            <option value="1e8">$100M</option>
+          </select>
+        </label>
+        <span id="count" class="muted"></span>
+      </div>
+      <div id="table-scroll">
+        <table>
+          <thead><tr id="thead"></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="chart-panel">
+      <div class="toolbar">
+        <span id="chart-title" class="muted">Click an asset to see its chart</span>
+        <span class="spacer"></span>
+        <span id="tf-buttons" class="btn-group"></span>
+      </div>
+      <div id="chart"></div>
+    </section>
+  </main>
+
+  <!-- Feature 2: rebased multi-asset comparison -->
+  <main id="view-compare" class="view" hidden>
+    <div class="toolbar">
+      <span id="lookback-buttons" class="btn-group"></span>
+      <span class="btn-group" id="mode-buttons">
+        <button type="button" data-mode="all">All assets</button>
+        <button type="button" data-mode="selected">Highlighted only</button>
+      </span>
+      <form id="hl-form" autocomplete="off">
+        <input id="hl-input" list="symbols" placeholder="Highlight symbol…" spellcheck="false">
+        <datalist id="symbols"></datalist>
+      </form>
+      <span id="hl-chips"></span>
+      <span class="spacer"></span>
+      <span id="cmp-note" class="muted"></span>
+    </div>
+    <div id="cmp-chart"><div id="cmp-empty" class="muted" hidden></div></div>
+  </main>
+
+  <script src="/static/vendor/lightweight-charts-5.2.1.js"></script>
+  <script src="/static/vendor/uPlot-1.6.32.iife.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

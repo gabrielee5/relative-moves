@@ -1,0 +1,52 @@
+# Relative Moves configuration
+
+[exchange]
+name = "hyperliquid"          # adapter key, see app/exchanges/__init__.py
+market = "perp"               # "perp" (spot not implemented yet)
+max_weight_per_min = 1000     # Hyperliquid allows 1200/min per IP; keep a margin
+
+[refresh]
+snapshot_every_sec = 300      # live price + 24h volume (one request)
+
+# Cached candle series. Each sync runs right after a `sync_every` boundary
+# and fetches only candles that closed since the last sync.
+[[series]]
+interval = "5m"               # ranking reference prices + 24h/7d comparison
+keep_days = 8
+sync_every = "15m"
+
+[[series]]
+interval = "1h"               # 30d comparison
+keep_days = 31
+sync_every = "1h"
+
+[ranking]
+interval = "5m"               # must be one of the series above
+windows = ["1h", "24h", "7d"]
+
+# Comparison chart: each lookback is drawn at `step`, resampled from the cached `source` series.
+[[compare]]
+lookback = "24h"
+step = "15m"
+source = "5m"
+
+[[compare]]
+lookback = "7d"
+step = "1h"
+source = "5m"
+
+[[compare]]
+lookback = "30d"
+step = "4h"
+source = "1h"
+
+[ui]
+ohlc_timeframes = ["15m", "1h", "4h", "1d"]
+
+[paths]
+data_dir = "data"                       # SQLite cache lives here
+highlights = "data/highlights.json"
+
+[server]
+host = "127.0.0.1"
+port = 8000
