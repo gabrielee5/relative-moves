@@ -127,7 +127,40 @@ td.sym { font-weight: 600; }
 }
 .cmp-tip b { margin-right: 6px; }
 
+/* --- strategies view --- */
+.badge {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+#view-strategies { display: grid; grid-template-columns: minmax(560px, 680px) 1fr; }
+#sig-panel { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+#sig-scroll { flex: 1; overflow: auto; }
+#sig-empty { padding: 24px 12px; text-align: center; }
+#sig-table th { cursor: default; }
+#sig-table th:nth-child(3), #sig-table td:nth-child(3) { text-align: left; }
+#sig-table th:nth-child(n+7), #sig-table td:nth-child(n+7) { text-align: left; }
+#sig-table td:first-child { color: var(--text); width: auto; padding-right: 10px; }
+#sig-table th:first-child { width: auto; padding-right: 10px; }
+#sig-table td.strat-name, #sig-table td.note { color: var(--muted); }
+#sig-table.no-stop th:nth-child(5), #sig-table.no-stop td:nth-child(5),
+#sig-table.no-target th:nth-child(6), #sig-table.no-target td:nth-child(6) { display: none; }
+#sig-table tr.new { box-shadow: inset 3px 0 0 var(--accent); background: rgba(88, 166, 255, 0.08); }
+#sig-table tr.new.selected { background: var(--row-sel); }
+#strat-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+#strat-chart-panel { display: flex; flex-direction: column; min-width: 0; }
+#strat-title b { font-size: 14px; margin-right: 8px; }
+#strat-title span { margin-right: 10px; }
+#strat-chart { flex: 1; min-height: 0; }
+
 @media (max-width: 900px) {
-  #view-ranking { grid-template-columns: 1fr; grid-template-rows: 1fr 360px; }
-  #table-panel { border-right: 0; border-bottom: 1px solid var(--border); }
+  #view-ranking, #view-strategies { grid-template-columns: 1fr; grid-template-rows: 1fr 360px; }
+  #table-panel, #sig-panel { border-right: 0; border-bottom: 1px solid var(--border); }
 }

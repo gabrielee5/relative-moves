@@ -15,6 +15,8 @@ from app.exchanges import ExchangeError, make_adapter
 from app.models import duration_ms
 from app.ratelimit import RateLimiter
 from app.refresher import Refresher, now_ms
+from app.signals import SignalStore
+from app.strategies import STRATEGIES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -23,7 +25,7 @@ OHLC_TTL_SEC = 60
 
 cfg = load_config()
 adapter = make_adapter(cfg.exchange, cfg.market, RateLimiter(cfg.max_weight_per_min))
-refresher = Refresher(adapter, CandleCache(cfg.db_path), cfg)
+refresher = Refresher(adapter, CandleCache(cfg.db_path), cfg, SignalStore(cfg.db_path), STRATEGIES)
 _ohlc_cache: dict[tuple[str, str], tuple[float, list]] = {}
 
 
@@ -54,6 +56,7 @@ def ui_config():
         "ohlc_timeframes": cfg.ohlc_timeframes,
         "compare_lookbacks": [c.lookback for c in cfg.compare],
         "snapshot_every_sec": cfg.snapshot_every_sec,
+        "strategies": [s.info() for s in STRATEGIES],
     }
 
 
@@ -100,6 +103,17 @@ def compare(lookback: str):
     if c is None:
         raise HTTPException(400, f"lookback must be one of {[c.lookback for c in cfg.compare]}")
     return refresher.compare(c)
+
+
+@app.get("/api/strategies")
+def strategies():
+    return [s.info() for s in STRATEGIES]
+
+
+@app.get("/api/signals")
+def signals(after_id: int = 0, strategy: str | None = None, symbol: str | None = None, limit: int = 500):
+    """Signals, newest first. `after_id` returns only rows added since the client's last poll."""
+    return refresher.signals.list(after_id=after_id, strategy=strategy, symbol=symbol, limit=min(limit, 5000))
 
 
 class Highlights(BaseModel):

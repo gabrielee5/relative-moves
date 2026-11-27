@@ -48,6 +48,19 @@ class CandleCache:
             cs.append(c)
         return out
 
+    def candles(self, interval: str, since_ms: int) -> dict[str, list[Candle]]:
+        """{symbol: candles}, oldest first."""
+        with self.lock:
+            cur = self.db.execute(
+                "SELECT symbol, t, o, h, l, c, v FROM candles WHERE interval=? AND t>=? ORDER BY symbol, t",
+                (interval, since_ms),
+            )
+            rows = cur.fetchall()
+        out: dict[str, list[Candle]] = {}
+        for sym, *ohlcv in rows:
+            out.setdefault(sym, []).append(Candle(*ohlcv))
+        return out
+
     def prune(self, interval: str, before_ms: int) -> None:
         with self.lock, self.db:
             self.db.execute("DELETE FROM candles WHERE interval=? AND t<?", (interval, before_ms))

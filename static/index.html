@@ -14,6 +14,7 @@
     <nav id="tabs">
       <button type="button" data-view="ranking">Ranking</button>
       <button type="button" data-view="compare">Compare</button>
+      <button type="button" data-view="strategies">Strategies <span id="strat-badge" class="badge" hidden></span></button>
     </nav>
     <span class="spacer"></span>
     <span id="status" class="muted"></span>
@@ -71,6 +72,33 @@
       <span id="cmp-note" class="muted"></span>
     </div>
     <div id="cmp-chart"><div id="cmp-empty" class="muted" hidden></div></div>
+  </main>
+
+  <!-- Feature 3: strategy signals + chart with markers -->
+  <main id="view-strategies" class="view" hidden>
+    <section id="sig-panel">
+      <div class="toolbar">
+        <select id="strat-filter"></select>
+        <span id="sig-count" class="muted"></span>
+        <span id="strat-desc" class="muted"></span>
+      </div>
+      <div id="sig-scroll">
+        <table id="sig-table">
+          <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Stop</th><th>Target</th><th>Strategy</th><th>Note</th></tr></thead>
+          <tbody id="sig-body"></tbody>
+        </table>
+        <div id="sig-empty" class="muted" hidden></div>
+      </div>
+    </section>
+
+    <section id="strat-chart-panel">
+      <div class="toolbar">
+        <span id="strat-title" class="muted">Click a signal to see its chart</span>
+        <span class="spacer"></span>
+        <span id="strat-tf-buttons" class="btn-group"></span>
+      </div>
+      <div id="strat-chart"></div>
+    </section>
   </main>
 
   <script src="/static/vendor/lightweight-charts-5.2.1.js"></script>

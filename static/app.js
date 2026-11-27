@@ -114,27 +114,90 @@ function renderStatus() {
 
 // ---------- chart ----------
 
-let chart = null;
-let candleSeries = null;
-let ohlcLoadedAt = 0;
-let ohlcToken = 0;
+// One candlestick chart in `el`. load() fetches /api/ohlc; markers and price lines are optional.
+function makeOhlcChart(el) {
+  let chart = null;
+  let series = null;
+  let markers = null;
+  let lines = [];
+  let token = 0;
+  let pending = { marks: [], lines: [] }; // applied after the next load
+  const c = { loadedAt: 0, bars: [] };
 
-function initChart() {
-  const css = getComputedStyle(document.documentElement);
-  const v = (name) => css.getPropertyValue(name).trim();
-  chart = LightweightCharts.createChart($("chart"), {
-    autoSize: true,
-    layout: { background: { color: v("--bg") }, textColor: v("--muted"), fontSize: 11, attributionLogo: false },
-    grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
-    rightPriceScale: { borderColor: v("--border") },
-    timeScale: { borderColor: v("--border"), timeVisible: true, secondsVisible: false, rightOffset: RIGHT_GAP_BARS },
-  });
-  candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-    upColor: v("--up"), downColor: v("--down"),
-    wickUpColor: v("--up"), wickDownColor: v("--down"),
-    borderVisible: false,
-  });
+  function init() {
+    const css = getComputedStyle(document.documentElement);
+    const v = (name) => css.getPropertyValue(name).trim();
+    chart = LightweightCharts.createChart(el, {
+      autoSize: true,
+      layout: { background: { color: v("--bg") }, textColor: v("--muted"), fontSize: 11, attributionLogo: false },
+      grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
+      rightPriceScale: { borderColor: v("--border") },
+      timeScale: { borderColor: v("--border"), timeVisible: true, secondsVisible: false, rightOffset: RIGHT_GAP_BARS },
+    });
+    series = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: v("--up"), downColor: v("--down"),
+      wickUpColor: v("--up"), wickDownColor: v("--down"),
+      borderVisible: false,
+    });
+    markers = LightweightCharts.createSeriesMarkers(series, []);
+  }
+
+  function apply() {
+    markers.setMarkers(pending.marks);
+    for (const l of lines) series.removePriceLine(l);
+    lines = pending.lines.map((o) => series.createPriceLine(o));
+  }
+
+  // Returns an error message, or null on success (also null when superseded by a newer call).
+  c.load = async (symbol, tf, fit) => {
+    const t = ++token;
+    const res = await fetch(`/api/ohlc?symbol=${encodeURIComponent(symbol)}&tf=${tf}`);
+    if (t !== token) return null; // a newer request superseded this one
+    if (!res.ok) return `chart failed: ${res.status}`;
+    const data = await res.json();
+    if (t !== token || !data.length) return null;
+    if (!chart) init();
+    series.applyOptions({ priceFormat: priceFormat(data[data.length - 1].c) });
+    c.bars = data;
+    series.setData(data.map((b) => ({ time: b.t / 1000 + TZ_SHIFT, open: b.o, high: b.h, low: b.l, close: b.c })));
+    apply();
+    // fitContent() would put the last candle against the price scale; leave a gap instead
+    if (fit) chart.timeScale().setVisibleLogicalRange({ from: 0, to: data.length - 1 + RIGHT_GAP_BARS });
+    c.loadedAt = Date.now();
+    return null;
+  };
+
+  // marks: [{t (ms), side, text}] ; priceLines: lightweight-charts price line options
+  c.setOverlays = (marks, priceLines) => {
+    pending = {
+      marks: marks
+        .map((m) => ({
+          time: m.t / 1000 + TZ_SHIFT,
+          position: m.side === "long" ? "belowBar" : "aboveBar",
+          shape: m.side === "long" ? "arrowUp" : "arrowDown",
+          color: m.color,
+          text: m.text || "",
+        }))
+        .sort((a, b) => a.time - b.time),
+      lines: priceLines,
+    };
+    if (chart) apply();
+  };
+
+  c.scrollTo = (tMs) => { // center the visible range on a time, keep the zoom
+    if (!chart || !c.bars.length) return;
+    const i = c.bars.findIndex((b) => b.t >= tMs);
+    if (i < 0) return;
+    const r = chart.timeScale().getVisibleLogicalRange();
+    const half = r ? (r.to - r.from) / 2 : 60;
+    if (r && i > r.from + 2 && i < r.to - 2) return; // already visible
+    chart.timeScale().setVisibleLogicalRange({ from: i - half, to: i + half });
+  };
+
+  return c;
 }
+
+const rankChart = makeOhlcChart($("chart"));
 
 function renderTfButtons() {
   $("tf-buttons").innerHTML = state.cfg.ohlc_timeframes
@@ -152,21 +215,8 @@ function renderChartTitle() {
 
 async function loadOhlc(fit) {
   if (!state.selected) return;
-  const token = ++ohlcToken;
-  const res = await fetch(`/api/ohlc?symbol=${encodeURIComponent(state.selected)}&tf=${state.tf}`);
-  if (token !== ohlcToken) return; // a newer request superseded this one
-  if (!res.ok) {
-    $("chart-title").innerHTML += ` <span class="warn">chart failed: ${res.status}</span>`;
-    return;
-  }
-  const data = await res.json();
-  if (token !== ohlcToken || !data.length) return;
-  if (!chart) initChart();
-  candleSeries.applyOptions({ priceFormat: priceFormat(data[data.length - 1].c) });
-  candleSeries.setData(data.map((c) => ({ time: c.t / 1000 + TZ_SHIFT, open: c.o, high: c.h, low: c.l, close: c.c })));
-  // fitContent() would put the last candle against the price scale; leave a gap instead
-  if (fit) chart.timeScale().setVisibleLogicalRange({ from: 0, to: data.length - 1 + RIGHT_GAP_BARS });
-  ohlcLoadedAt = Date.now();
+  const err = await rankChart.load(state.selected, state.tf, fit);
+  if (err) $("chart-title").innerHTML += ` <span class="warn">${err}</span>`;
 }
 
 function selectAsset(sym) {
@@ -195,7 +245,7 @@ async function loadRanking() {
   if (dl.children.length !== state.rows.length) {
     dl.innerHTML = state.rows.map((r) => r.symbol).sort().map((s) => `<option value="${s}">`).join("");
   }
-  if (state.selected && Date.now() - ohlcLoadedAt > OHLC_RELOAD_MS) loadOhlc(false);
+  if (state.selected && Date.now() - rankChart.loadedAt > OHLC_RELOAD_MS) loadOhlc(false);
 }
 
 async function refreshNow() {
@@ -209,9 +259,10 @@ async function refreshNow() {
     await loadRanking();
     if (state.status?.snapshot_at !== before) break;
   }
-  ohlcLoadedAt = 0;
   loadOhlc(false);
   if (currentView() === "compare") loadCompare(false);
+  loadSignals();
+  if (strat.selected) loadStratChart(false);
   btn.disabled = false;
   btn.textContent = "Refresh";
 }
@@ -436,23 +487,217 @@ function initCompare() {
   }).observe($("cmp-chart"));
 }
 
+// ---------- strategies view ----------
+
+const UNIT_MS = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+const durMs = (s) => Number(s.slice(0, -1)) * UNIT_MS[s.slice(-1)];
+const SEEN_KEY = "rm.signals.seenId";
+
+const strat = {
+  list: [],             // strategy info from /api/config
+  signals: [],          // newest first
+  maxId: 0,
+  seenId: 0,            // live signals with id > seenId count in the tab badge
+  hlAbove: Infinity,    // rows with id > hlAbove are highlighted as new
+  viewing: false,       // Strategies tab is open: arriving signals count as seen
+  filter: "",           // strategy id, "" = all
+  selected: null,       // selected signal
+  tf: null,
+};
+const stratChart = makeOhlcChart($("strat-chart"));
+
+const stratInfo = (id) => strat.list.find((s) => s.id === id) || { id, name: id, timeframe: "1h" };
+
+function readSeen() {
+  try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; }
+}
+function writeSeen(id) {
+  strat.seenId = id;
+  try { localStorage.setItem(SEEN_KEY, String(id)); } catch { /* private mode: badge resets on reload */ }
+}
+
+function fmtDateTime(ms) {
+  return new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// Signal time = close of the trigger candle (the moment the condition was confirmed).
+const signalTime = (r) => r.t + durMs(stratInfo(r.strategy).timeframe);
+
+function renderStratFilter() {
+  const opts = [`<option value="">All strategies</option>`].concat(
+    strat.list.map((s) => `<option value="${s.id}" ${s.id === strat.filter ? "selected" : ""}>${s.name}</option>`)
+  );
+  $("strat-filter").innerHTML = opts.join("");
+  const info = strat.filter ? stratInfo(strat.filter) : null;
+  $("strat-desc").textContent = info ? `${info.timeframe} · ${info.description}` : "";
+}
+
+function renderBadge() {
+  const n = strat.signals.filter((r) => !r.backfill && r.id > strat.seenId).length;
+  $("strat-badge").textContent = n;
+  $("strat-badge").hidden = n === 0;
+}
+
+function renderSignals() {
+  const rows = strat.signals.filter((r) => !strat.filter || r.strategy === strat.filter);
+  const sel = strat.selected?.id;
+  $("sig-body").innerHTML = rows
+    .map((r) => {
+      const cls = [r.id === sel ? "selected" : "", !r.backfill && r.id > strat.hlAbove ? "new" : ""].join(" ");
+      const side = r.side === "long" ? "up" : "down";
+      return `<tr data-id="${r.id}" class="${cls}">
+        <td>${fmtDateTime(signalTime(r))}</td><td class="sym">${r.symbol}</td>
+        <td class="${side}">${r.side.toUpperCase()}</td><td>${fmtPrice(r.price)}</td>
+        <td>${r.stop == null ? "—" : fmtPrice(r.stop)}</td><td>${r.target == null ? "—" : fmtPrice(r.target)}</td>
+        <td class="strat-name">${stratInfo(r.strategy).name}</td><td class="note" title="${(r.note || "").replace(/"/g, "&quot;")}">${r.note || ""}</td></tr>`;
+    })
+    .join("");
+  // hide Stop / Target when no listed signal has one (some strategies never set them)
+  $("sig-table").classList.toggle("no-stop", !rows.some((r) => r.stop != null));
+  $("sig-table").classList.toggle("no-target", !rows.some((r) => r.target != null));
+  $("sig-count").textContent = `${rows.length} signal${rows.length === 1 ? "" : "s"}`;
+  $("sig-empty").hidden = rows.length > 0;
+  $("sig-empty").textContent = strat.list.length
+    ? "No signals yet. Strategies run after each candle sync."
+    : "No strategies registered. Add one in app/strategies/.";
+}
+
+async function loadSignals() {
+  let rows;
+  try {
+    const res = await fetch(`/api/signals?after_id=${strat.maxId}&limit=${strat.maxId ? 500 : 5000}`);
+    if (!res.ok) return;
+    rows = await res.json();
+  } catch {
+    return;
+  }
+  if (!rows.length) return;
+  strat.signals = rows.concat(strat.signals).sort((a, b) => b.t - a.t || b.id - a.id);
+  strat.maxId = Math.max(strat.maxId, ...rows.map((r) => r.id));
+  if (strat.viewing) writeSeen(strat.maxId);
+  renderBadge();
+  renderSignals();
+  if (strat.selected && rows.some((r) => r.symbol === strat.selected.symbol)) setStratOverlays();
+}
+
+function renderStratTfButtons() {
+  $("strat-tf-buttons").innerHTML = state.cfg.ohlc_timeframes
+    .map((tf) => `<button type="button" data-tf="${tf}" class="${tf === strat.tf ? "active" : ""}">${tf}</button>`)
+    .join("");
+}
+
+// Chart timeframe for a strategy: its own timeframe if the chart has it, else the closest one.
+function chartTf(tf) {
+  const tfs = state.cfg.ohlc_timeframes;
+  if (tfs.includes(tf)) return tf;
+  return tfs.reduce((best, x) => (Math.abs(durMs(x) - durMs(tf)) < Math.abs(durMs(best) - durMs(tf)) ? x : best));
+}
+
+function setStratOverlays() {
+  const sel = strat.selected;
+  if (!sel) return;
+  const step = durMs(strat.tf);
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  const marks = strat.signals
+    .filter((r) => r.strategy === sel.strategy && r.symbol === sel.symbol)
+    .map((r) => ({
+      t: r.t - (r.t % step), // align to the chart bar that contains the trigger candle
+      side: r.side,
+      color: r.id === sel.id ? v("--accent") : r.side === "long" ? v("--up") : v("--down"),
+      text: r.id === sel.id ? `${r.side === "long" ? "L" : "S"} ${fmtPrice(r.price)}` : r.side === "long" ? "L" : "S",
+    }));
+  const line = (price, color, title, style) => ({ price, color, title, lineStyle: style, lineWidth: 1, axisLabelVisible: true });
+  const lines = [line(sel.price, v("--accent"), "entry", 0)];
+  if (sel.stop != null) lines.push(line(sel.stop, v("--down"), "stop", 2));
+  if (sel.target != null) lines.push(line(sel.target, v("--up"), "target", 2));
+  stratChart.setOverlays(marks, lines);
+}
+
+function renderStratTitle() {
+  const r = strat.selected;
+  if (!r) return;
+  const side = r.side === "long" ? "up" : "down";
+  $("strat-title").className = "";
+  $("strat-title").innerHTML = `<b>${r.symbol}</b><span class="${side}">${r.side.toUpperCase()} ${fmtPrice(r.price)}</span>` +
+    `<span class="muted">${stratInfo(r.strategy).name} · ${fmtDateTime(signalTime(r))}</span>`;
+}
+
+async function loadStratChart(fit) {
+  const r = strat.selected;
+  if (!r) return;
+  const err = await stratChart.load(r.symbol, strat.tf, fit);
+  if (err) $("strat-title").innerHTML += ` <span class="warn">${err}</span>`;
+  else if (fit) stratChart.scrollTo(r.t);
+}
+
+function selectSignal(id) {
+  const r = strat.signals.find((x) => x.id === id);
+  if (!r) return;
+  const prev = strat.selected;
+  strat.selected = r;
+  const reload = !prev || prev.symbol !== r.symbol || prev.strategy !== r.strategy;
+  if (reload) strat.tf = chartTf(stratInfo(r.strategy).timeframe);
+  renderStratTfButtons();
+  renderSignals();
+  renderStratTitle();
+  setStratOverlays();
+  if (reload) loadStratChart(true);
+  else stratChart.scrollTo(r.t);
+}
+
+function initStrategies() {
+  strat.list = state.cfg.strategies || [];
+  strat.seenId = readSeen();
+  renderStratFilter();
+  $("strat-filter").addEventListener("change", (e) => {
+    strat.filter = e.target.value;
+    renderStratFilter();
+    renderSignals();
+  });
+  $("sig-body").addEventListener("click", (e) => {
+    const id = Number(e.target.closest("tr")?.dataset.id);
+    if (id) selectSignal(id);
+  });
+  $("strat-tf-buttons").addEventListener("click", (e) => {
+    const tf = e.target.dataset?.tf;
+    if (!tf || tf === strat.tf || !strat.selected) return;
+    strat.tf = tf;
+    renderStratTfButtons();
+    setStratOverlays();
+    loadStratChart(true);
+  });
+}
+
 // ---------- views ----------
 
+const VIEWS = ["ranking", "compare", "strategies"];
+
 function currentView() {
-  return location.hash === "#compare" ? "compare" : "ranking";
+  const v = location.hash.slice(1);
+  return VIEWS.includes(v) ? v : "ranking";
 }
 
 function showView() {
   const view = currentView();
   for (const b of $("tabs").children) b.classList.toggle("active", b.dataset.view === view);
-  $("view-ranking").hidden = view !== "ranking";
-  $("view-compare").hidden = view !== "compare";
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== view;
   if (view === "compare") loadCompare(!cmp.plot);
+  const entering = view === "strategies" && !strat.viewing;
+  strat.viewing = view === "strategies";
+  if (entering) {
+    strat.hlAbove = strat.seenId; // highlight what arrived since the last visit
+    writeSeen(strat.maxId);
+    renderBadge();
+    renderSignals();
+  }
 }
 
 async function poll() {
   await loadRanking();
   if (currentView() === "compare") loadCompare(false);
+  await loadSignals();
+  if (strat.selected && Date.now() - stratChart.loadedAt > OHLC_RELOAD_MS) loadStratChart(false);
 }
 
 // ---------- wiring ----------
@@ -487,15 +732,17 @@ async function main() {
 
   $("tabs").addEventListener("click", (e) => {
     const view = e.target.dataset?.view;
-    if (view) location.hash = view === "compare" ? "compare" : "";
+    if (view) location.hash = view === "ranking" ? "" : view;
   });
   window.addEventListener("hashchange", showView);
 
   cmp.highlights = (await (await fetch("/api/highlights")).json()).symbols;
   initCompare();
+  initStrategies();
   renderHead();
   renderTfButtons();
   await loadRanking();
+  await loadSignals();
   showView();
   setInterval(poll, POLL_MS);
 }

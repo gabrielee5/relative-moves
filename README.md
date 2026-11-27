@@ -66,6 +66,19 @@ exchange adapter ──► rate limiter ──► SQLite cache ──► metrics
   - "All assets" / "Highlighted only" toggles the grey lines.
   - Hover near a line to see its name, % move and time.
 
+- **Strategies** tab (`/#strategies`): signals (orders) from the strategies in `app/strategies/`.
+  - List, newest first: signal time (close of the trigger candle), symbol, side, entry, stop, target, strategy, note.
+  - Strategies run after each sync of their source series, on closed candles only. A signal never changes after it appears.
+  - On start, each strategy runs over the whole cache, so past signals show at once ("backfill").
+    A signal is **live** if it was found within one sync period of its candle close.
+    Live signals that arrived since your last visit are highlighted, and the tab shows their count.
+  - Click a row: candlestick chart at the strategy timeframe, with every signal of that strategy on that asset
+    (▲ long, ▼ short) and the entry / stop / target of the clicked one as lines.
+  - Each note starts with the asset's **volume rank at signal time**, e.g. `vol #12/179 ($45.2M 24h)`:
+    24h notional volume (base volume × close, from the cached candles) up to the trigger candle close,
+    ranked against all cached assets at that same time. #1 = highest volume.
+  - Signals are stored in the `signals` table of the SQLite cache.
+
 The candle sync runs in the background and never uses the last 10% of the rate budget.
 That reserve keeps chart clicks fast during a long sync.
 
@@ -78,6 +91,27 @@ That reserve keeps chart clicks fast during a long sync.
 | `POST /api/refresh` | Refresh now (snapshot + any newly closed candles) |
 | `GET /api/ohlc?symbol=BTC&tf=1h` | Recent candles for one asset |
 | `GET /api/config` | Settings the UI needs |
+| `GET /api/strategies` | Registered strategies |
+| `GET /api/signals?after_id=&strategy=&symbol=` | Signals, newest first |
+
+### Add a strategy
+
+1. Create `app/strategies/<name>.py` with a subclass of `Strategy` (`app/strategies/base.py`):
+   set `id`, `name`, `description`, `source` (a cached `[[series]]` interval: `5m` or `1h`) and
+   `timeframe` (bar size you want; source candles are resampled to it).
+2. Implement `evaluate(symbol, candles) -> list[Signal]`. It gets all closed candles of one asset,
+   oldest first, and returns every signal in that history. The same code serves backfill and live runs.
+3. Add an instance to `STRATEGIES` in `app/strategies/__init__.py` and restart.
+
+Strategies included:
+
+- **Volatility System** (`volatility_system.py`): port of the freqtrade strategy `VolatilitySystem`.
+  The 3h close change (1h candles resampled to 3h) is compared with 2 × ATR(14) of the 3h bars, every hour.
+  The list shows the orders the freqtrade bot would place: add (2nd entry on a new signal) and reverse
+  (exit + opposite entry). The module docstring explains the exact timing.
+
+A strategy sees at most the cached history (5m: 8 days, 1h: 31 days). For longer indicators,
+add a `[[series]]` with a longer `keep_days` in `config.toml`.
 | `GET /api/compare?lookback=7d` | Rebased % series for all assets |
 | `GET /api/highlights`, `PUT /api/highlights` | Read / replace the highlight list (`{"symbols": [...]}`) |
 

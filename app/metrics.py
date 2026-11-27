@@ -1,5 +1,5 @@
 """Pure calculations. No I/O."""
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 
 from app.models import Ticker
 
@@ -72,3 +72,39 @@ def sort_rows(rows: list[dict], key: str, descending: bool = True) -> list[dict]
     present = [r for r in rows if r.get(key) is not None]
     missing = [r for r in rows if r.get(key) is None]
     return sorted(present, key=lambda r: r[key], reverse=descending) + missing
+
+
+def volume_ranks(
+    candles: dict[str, list], ends: set[int], step: int, window: int = 86_400_000
+) -> dict[int, dict[str, tuple[int, int, float]]]:
+    """{end: {symbol: (rank, n_assets, quote volume)}} by notional volume in [end - window, end).
+
+    `candles`: {symbol: Candle list, oldest first, bar size `step`}. Notional = base volume × close.
+    Rank 1 = highest volume. An asset with no candle in the window is not ranked.
+    """
+    pre: dict[str, tuple[list[int], list[float]]] = {}
+    for sym, cs in candles.items():
+        ts, acc, total = [], [0.0], 0.0
+        for c in cs:
+            ts.append(c.t)
+            total += c.v * c.c
+            acc.append(total)
+        pre[sym] = (ts, acc)
+    out = {}
+    for end in ends:
+        vols = []
+        for sym, (ts, acc) in pre.items():
+            lo = bisect_left(ts, end - window)      # first candle opening at/after window start
+            hi = bisect_left(ts, end - step + 1)    # candles that closed by `end`
+            if hi > lo:
+                vols.append((acc[hi] - acc[lo], sym))
+        vols.sort(reverse=True)
+        out[end] = {sym: (i + 1, len(vols), v) for i, (v, sym) in enumerate(vols)}
+    return out
+
+
+def fmt_usd(v: float) -> str:
+    for div, unit in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if v >= div:
+            return f"${v / div:.1f}{unit}"
+    return f"${v:.0f}"
